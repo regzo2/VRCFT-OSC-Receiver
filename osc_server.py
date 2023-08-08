@@ -1,11 +1,11 @@
 import bpy
 import socket
-import threading
+import concurrent.futures
 import os
 import select
 from . import osc_wrapper
 
-thread = None
+executer = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 recv_sock = None
 cancellation_token = False
 shape_keys = {}
@@ -13,15 +13,13 @@ cached_address_conversions = {}
 
 
 def shutdown():
-    global thread
     global recv_sock
     global cancellation_token
 
     cancellation_token = True
     recv_sock.shutdown(socket.SHUT_RDWR)
-    if thread is not None:
-        thread.join()
-        thread = None
+    if executer is not None:
+        executer.shutdown()
     set_remote_all_params_relevant(False)
 
 
@@ -78,7 +76,7 @@ class VRCFT_OSC_Server(bpy.types.Operator):
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        global thread
+        global executer
         global recv_sock
         global cancellation_token
         global shape_keys
@@ -110,9 +108,15 @@ class VRCFT_OSC_Server(bpy.types.Operator):
             prop = context.scene.vrcft_shapekey_standard
 
             recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            recv_sock.bind(("127.0.0.1", context.scene.vrcft_osc_port))
-            thread = threading.Thread(target=recv_and_process, args=(prop,))
-            thread.start()
+            try:
+                recv_sock.bind(("127.0.0.1", context.scene.vrcft_osc_port))
+            except socket.error:
+                self.report({'ERROR'}, "Port is already in use")
+                return {'CANCELLED'} 
+
+
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            executor.submit(recv_and_process, prop)
 
             # Now tell vrcft to start sending all osc messages
             set_remote_all_params_relevant(True)
